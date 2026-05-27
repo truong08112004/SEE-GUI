@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { predictChinaEffortRuleBased } from "@/lib/china-rule-based"
 
 export interface ChinaDatasetInput {
   AFP: number // Adjusted Function Points
@@ -24,6 +25,10 @@ export interface ChinaPredictionResult {
   dataset: string
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
 export function useChinaPrediction() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -34,22 +39,11 @@ export function useChinaPrediction() {
     setError(null)
 
     try {
-      const response = await fetch("/api/explain/china", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(input),
-      })
-
-      const data = await response.json()
-
-      if (!data.success) {
-        throw new Error(data.error || "Prediction failed")
-      }
-
-      setResult(data.explanation)
-      return data.explanation
+      // Local/offline prediction (rule-based). Small delay keeps UX consistent.
+      await sleep(220)
+      const explanation = predictChinaEffortRuleBased(input)
+      setResult(explanation)
+      return explanation
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to get prediction"
       setError(errorMessage)

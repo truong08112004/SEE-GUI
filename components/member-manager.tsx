@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import type { Tables } from "@/lib/supabase/database.types";
-import { createClient } from "@/lib/supabase/client";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { CreateMemberForm } from "@/components/create-member-form";
 import { UserPlus, X, Search, Users, Shield } from "lucide-react";
 
 interface ProjectMember {
@@ -33,50 +33,32 @@ interface MemberManagerProps {
   projectId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  canChangeRoles?: boolean;
+  canManageMembers?: boolean;
+  canCreateAccounts?: boolean;
+  accountCreationAvailable?: boolean;
 }
 
 export function MemberManager({
   projectId,
   open,
   onOpenChange,
+  canChangeRoles = false,
+  canManageMembers = false,
+  canCreateAccounts = false,
+  accountCreationAvailable = false,
 }: MemberManagerProps) {
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [availableUsers, setAvailableUsers] = useState<Tables<"users">[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     if (open) {
       fetchMembers();
-      checkAdminStatus();
+      if (canManageMembers) fetchAvailableUsers();
     }
-  }, [open, projectId]);
-
-  useEffect(() => {
-    if (open && isAdmin) {
-      fetchAvailableUsers();
-    }
-  }, [open, isAdmin]);
-
-  const checkAdminStatus = async () => {
-    const supabase = createClient();
-    const {
-      data: { user: authUser },
-    } = await supabase.auth.getUser();
-
-    if (authUser) {
-      const { data: dbUser } = await supabase
-        .from("users")
-        .select("is_admin")
-        .eq("user_auth_id", authUser.id)
-        .single();
-
-      if (dbUser) {
-        setIsAdmin(dbUser.is_admin === true);
-      }
-    }
-  };
+  }, [open, projectId, canManageMembers]);
 
   const fetchMembers = async () => {
     const res = await fetch(`/api/projects/${projectId}/members`);
@@ -100,13 +82,13 @@ export function MemberManager({
   };
 
   useEffect(() => {
-    if (open && isAdmin) {
+    if (open && canManageMembers) {
       const timer = setTimeout(() => {
         fetchAvailableUsers();
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [searchQuery, open, isAdmin]);
+  }, [searchQuery, open, canManageMembers]);
 
   const addMember = async (userId: string, role: string = "member") => {
     setIsLoading(true);
@@ -175,28 +157,39 @@ export function MemberManager({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Users className="size-5" />
             Project Members
           </DialogTitle>
           <DialogDescription>
-            {isAdmin
-              ? "Add users to project and manage their roles"
-              : "View project members (Admin only: Add/Edit/Remove)"}
+            {canChangeRoles || canCreateAccounts
+              ? "Add members, create new accounts, or manage roles"
+              : "View project members (admins can edit)"}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Search and Add Users - Only visible to admins */}
-          {isAdmin && (
+          {canCreateAccounts && (
+            <CreateMemberForm
+              projectId={projectId}
+              onCreated={async () => {
+                await fetchMembers();
+                if (canManageMembers) await fetchAvailableUsers();
+              }}
+              enabled={accountCreationAvailable}
+              variant="plain"
+            />
+          )}
+
+          {canManageMembers && (
             <div className="space-y-2">
-              <h4 className="text-sm font-medium">Add Members</h4>
+              <h4 className="text-sm font-medium">Add existing user</h4>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search users by name or email..."
+                  placeholder="Search by name or email..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-9"
@@ -206,7 +199,7 @@ export function MemberManager({
               <div className="border rounded-md divide-y max-h-40 overflow-y-auto">
                 {filteredUsers.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">
-                    No available users found
+                    No matching users found
                   </p>
                 ) : (
                   filteredUsers.map((user) => (
@@ -244,11 +237,11 @@ export function MemberManager({
             </div>
           )}
 
-          {!isAdmin && (
+          {!canChangeRoles && !canCreateAccounts && (
             <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-md border border-muted">
               <Shield className="size-4 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                Only administrators can add, edit, or remove members.
+                Only project administrators can add, edit, or remove members.
               </p>
             </div>
           )}
@@ -256,12 +249,12 @@ export function MemberManager({
           {/* Current Members */}
           <div className="space-y-2">
             <h4 className="text-sm font-medium">
-              Current Members ({members.length})
+              Current members ({members.length})
             </h4>
             <div className="border rounded-md divide-y max-h-60 overflow-y-auto">
               {members.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">
-                  No members yet. Add users above.
+                  No members yet. Add someone from the panel above.
                 </p>
               ) : (
                 members.map((member) => (
@@ -293,8 +286,8 @@ export function MemberManager({
                       <Select
                         value={member.role || "member"}
                         onValueChange={(role) => updateRole(member.id, role)}
-                        disabled={!isAdmin}>
-                        <SelectTrigger className="w-24 h-8" disabled={!isAdmin}>
+                        disabled={!canChangeRoles}>
+                        <SelectTrigger className="w-24 h-8" disabled={!canChangeRoles}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -308,7 +301,7 @@ export function MemberManager({
                         variant="ghost"
                         className="size-8 text-destructive hover:text-destructive disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={() => removeMember(member.id)}
-                        disabled={!isAdmin}>
+                        disabled={!canChangeRoles}>
                         <X className="size-4" />
                       </Button>
                     </div>

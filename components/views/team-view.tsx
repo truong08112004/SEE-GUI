@@ -2,10 +2,16 @@
 
 import { useState, useEffect } from "react";
 import type { Tables } from "@/lib/supabase/database.types";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import {
     Select,
     SelectContent,
@@ -20,6 +26,7 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card";
+import { CreateMemberForm } from "@/components/create-member-form";
 import { UserPlus, X, Search, Users, Mail, Shield } from "lucide-react";
 
 interface ProjectMember {
@@ -31,44 +38,33 @@ interface ProjectMember {
 
 interface TeamViewProps {
     projectId: string;
+    canManageMembers?: boolean;
+    canChangeRoles?: boolean;
+    canCreateAccounts?: boolean;
+    accountCreationAvailable?: boolean;
 }
 
-export function TeamView({ projectId }: TeamViewProps) {
+export function TeamView({
+    projectId,
+    canManageMembers = false,
+    canChangeRoles = false,
+    canCreateAccounts = false,
+    accountCreationAvailable = false,
+}: TeamViewProps) {
     const [members, setMembers] = useState<ProjectMember[]>([]);
     const [availableUsers, setAvailableUsers] = useState<Tables<"users">[]>([]);
     const [searchQuery, setSearchQuery] = useState("");
     const [isLoading, setIsLoading] = useState(false);
-    const [isAdmin, setIsAdmin] = useState(false);
-
+    const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
     useEffect(() => {
         fetchMembers();
-        checkAdminStatus();
     }, [projectId]);
 
     useEffect(() => {
-        if (isAdmin) {
+        if (canManageMembers) {
             fetchAvailableUsers();
         }
-    }, [projectId, isAdmin]);
-
-    const checkAdminStatus = async () => {
-        const supabase = createClient();
-        const {
-            data: { user: authUser },
-        } = await supabase.auth.getUser();
-
-        if (authUser) {
-            const { data: dbUser } = await supabase
-                .from("users")
-                .select("is_admin")
-                .eq("user_auth_id", authUser.id)
-                .single();
-
-            if (dbUser) {
-                setIsAdmin(dbUser.is_admin === true);
-            }
-        }
-    };
+    }, [projectId, canManageMembers]);
 
     const fetchMembers = async () => {
         const res = await fetch(`/api/projects/${projectId}/members`);
@@ -92,13 +88,13 @@ export function TeamView({ projectId }: TeamViewProps) {
     };
 
     useEffect(() => {
-        if (isAdmin) {
+        if (canManageMembers) {
             const timer = setTimeout(() => {
                 fetchAvailableUsers();
             }, 300);
             return () => clearTimeout(timer);
         }
-    }, [searchQuery, isAdmin]);
+    }, [searchQuery, canManageMembers]);
 
     const addMember = async (userId: string, role: string = "member") => {
         setIsLoading(true);
@@ -166,14 +162,19 @@ export function TeamView({ projectId }: TeamViewProps) {
         );
     });
 
+    const refreshAll = async () => {
+        await fetchMembers();
+        if (canManageMembers) await fetchAvailableUsers();
+    };
+
     return (
-        <div className="p-6 max-w-5xl mx-auto space-y-8">
+        <div className="max-w-5xl mx-auto space-y-6">
             <div>
-                <h2 className="text-2xl font-bold tracking-tight">Team Management</h2>
-                <p className="text-muted-foreground">
-                    {isAdmin
-                        ? "Manage members and their roles in this project."
-                        : "View project members (Admin only: Add/Edit/Remove)"}
+                <h2 className="text-xl font-semibold text-[#172B4D]">People</h2>
+                <p className="text-sm text-[#5E6C84] mt-1">
+                    {canManageMembers || canCreateAccounts
+                        ? "Manage project access, roles, and create new member accounts."
+                        : "View project members. Contact an admin to make changes."}
                 </p>
             </div>
 
@@ -193,7 +194,7 @@ export function TeamView({ projectId }: TeamViewProps) {
                             <div className="space-y-4">
                                 {members.length === 0 ? (
                                     <div className="text-center py-8 text-muted-foreground">
-                                        {isAdmin
+                                        {canManageMembers
                                             ? "No members found. Invite someone from the right panel."
                                             : "No members found in this project."}
                                     </div>
@@ -233,15 +234,15 @@ export function TeamView({ projectId }: TeamViewProps) {
                                                 <Select
                                                     value={member.role || "member"}
                                                     onValueChange={(role) => updateRole(member.id, role)}
-                                                    disabled={!isAdmin}
+                                                    disabled={!canChangeRoles}
                                                 >
-                                                    <SelectTrigger className="w-[110px] h-9" disabled={!isAdmin}>
+                                                    <SelectTrigger className="w-[110px] h-9" disabled={!canChangeRoles}>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
-                                                        <SelectItem value="owner">Owner</SelectItem>
                                                         <SelectItem value="admin">Admin</SelectItem>
                                                         <SelectItem value="member">Member</SelectItem>
+                                                        <SelectItem value="viewer">Viewer</SelectItem>
                                                     </SelectContent>
                                                 </Select>
                                                 <Button
@@ -249,7 +250,7 @@ export function TeamView({ projectId }: TeamViewProps) {
                                                     variant="ghost"
                                                     className="h-9 w-9 text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
                                                     onClick={() => removeMember(member.id)}
-                                                    disabled={!isAdmin}
+                                                    disabled={!canManageMembers}
                                                 >
                                                     <X className="w-4 h-4" />
                                                 </Button>
@@ -262,13 +263,49 @@ export function TeamView({ projectId }: TeamViewProps) {
                     </Card>
                 </div>
 
-                {isAdmin ? (
-                    <div className="md:col-span-1">
-                        <Card className="bg-slate-50 border-indigo-100">
-                            <CardHeader className="bg-indigo-50/50 border-b border-indigo-100 pb-4">
-                                <CardTitle className="text-base font-semibold text-indigo-900 flex items-center gap-2">
-                                    <UserPlus className="w-4 h-4" />
-                                    Invite New Members
+                {(canCreateAccounts || canManageMembers) ? (
+                    <div className="md:col-span-1 space-y-4">
+                        {canCreateAccounts && (
+                            <>
+                                <Button
+                                    type="button"
+                                    onClick={() => setIsCreateAccountOpen(true)}
+                                    className="w-full rounded-sm bg-[#0052CC] hover:bg-[#0065FF]"
+                                >
+                                    <UserPlus className="w-4 h-4 mr-2" />
+                                    Create member account
+                                </Button>
+
+                                <Dialog
+                                    open={isCreateAccountOpen}
+                                    onOpenChange={setIsCreateAccountOpen}
+                                >
+                                    <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+                                        <DialogHeader>
+                                            <DialogTitle>Create member account</DialogTitle>
+                                            <DialogDescription>
+                                                Creates a Supabase auth user and adds them to this project.
+                                            </DialogDescription>
+                                        </DialogHeader>
+                                        <CreateMemberForm
+                                            projectId={projectId}
+                                            onCreated={async () => {
+                                                await refreshAll();
+                                                setIsCreateAccountOpen(false);
+                                            }}
+                                            enabled={accountCreationAvailable}
+                                            variant="plain"
+                                        />
+                                    </DialogContent>
+                                </Dialog>
+                            </>
+                        )}
+                        {canManageMembers && (
+                        <Card className="bg-white border-[#DFE1E6] rounded-sm ads-raised">
+                            <CardHeader className="border-b border-[#DFE1E6] pb-3">
+                                <CardTitle className="text-base font-semibold text-[#172B4D] flex items-center gap-2">
+                                    <UserPlus className="w-4 h-4 text-[#0052CC]" />
+                                    Add existing user
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="pt-6">
@@ -326,6 +363,7 @@ export function TeamView({ projectId }: TeamViewProps) {
                                 </div>
                             </CardContent>
                         </Card>
+                        )}
                     </div>
                 ) : (
                     <div className="md:col-span-1">

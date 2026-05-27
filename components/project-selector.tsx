@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/supabase/database.types";
 import {
   Dialog,
@@ -22,61 +21,50 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, FolderOpen } from "lucide-react";
+import { Plus, FolderOpen, ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface ProjectSelectorProps {
   currentProject: Tables<"projects"> | null;
   onProjectChange: (project: Tables<"projects">) => void;
+  variant?: "default" | "topbar";
 }
 
 export function ProjectSelector({
   currentProject,
   onProjectChange,
+  variant = "default",
 }: ProjectSelectorProps) {
   const [projects, setProjects] = useState<Tables<"projects">[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [canCreateProject, setCanCreateProject] = useState(false);
 
   useEffect(() => {
     fetchProjects();
-    checkAdminStatus();
+    checkCanCreate();
   }, []);
 
-  const checkAdminStatus = async () => {
-    const supabase = createClient();
-    const {
-      data: { user: authUser },
-    } = await supabase.auth.getUser();
-
-    if (authUser) {
-      const { data: dbUser } = await supabase
-        .from("users")
-        .select("id, is_admin")
-        .eq("user_auth_id", authUser.id)
-        .single();
-
-      if (dbUser) {
-        setCurrentUserId(dbUser.id);
-        setIsAdmin(dbUser.is_admin === true);
-      }
+  const checkCanCreate = async () => {
+    const res = await fetch("/api/users/me").catch(() => null);
+    if (res?.ok) {
+      const data = await res.json();
+      setCanCreateProject(data.is_admin === true);
     }
   };
 
   const fetchProjects = async () => {
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("projects")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (data) setProjects(data);
+    const res = await fetch("/api/projects");
+    if (res.ok) {
+      const data = await res.json();
+      setProjects(data);
+    }
   };
 
   const handleCreate = async () => {
-    if (!newName.trim() || !currentUserId) return;
+    if (!newName.trim()) return;
     setIsLoading(true);
 
     try {
@@ -86,7 +74,6 @@ export function ProjectSelector({
         body: JSON.stringify({
           name: newName,
           description: newDescription,
-          creator_user_id: currentUserId,
         }),
       });
 
@@ -99,7 +86,6 @@ export function ProjectSelector({
         setNewDescription("");
       } else {
         const error = await res.json();
-        console.error("Error creating project:", error.error);
         alert(error.error);
       }
     } catch (error) {
@@ -109,6 +95,8 @@ export function ProjectSelector({
     }
   };
 
+  const isTopbar = variant === "topbar";
+
   return (
     <div className="flex items-center gap-2">
       <Select
@@ -116,10 +104,19 @@ export function ProjectSelector({
         onValueChange={(id) => {
           const project = projects.find((p) => p.id === id);
           if (project) onProjectChange(project);
-        }}>
-        <SelectTrigger className="w-[200px]">
-          <FolderOpen className="size-4 mr-2" />
-          <SelectValue placeholder="Select project" />
+        }}
+      >
+        <SelectTrigger
+          className={cn(
+            "w-[180px] h-8 text-sm rounded-[3px] border-0 shadow-none",
+            isTopbar
+              ? "bg-white/10 text-white hover:bg-white/15 [&_svg]:text-white"
+              : "border-2 border-[#DFE1E6] bg-white"
+          )}
+        >
+          <FolderOpen className={cn("size-3.5 mr-1.5", isTopbar && "text-white/80")} />
+          <SelectValue placeholder="Project" />
+          <ChevronDown className={cn("size-3 opacity-60", isTopbar && "text-white")} />
         </SelectTrigger>
         <SelectContent>
           {projects.map((project) => (
@@ -130,32 +127,38 @@ export function ProjectSelector({
         </SelectContent>
       </Select>
 
-      {isAdmin && (
+      {canCreateProject && (
         <Button
-          size="icon"
-          variant="outline"
-          onClick={() => setIsCreateOpen(true)}>
+          size="icon-sm"
+          variant="ghost"
+          onClick={() => setIsCreateOpen(true)}
+          className={cn(
+            "rounded-[3px]",
+            isTopbar && "text-white hover:bg-white/10"
+          )}
+        >
           <Plus className="size-4" />
         </Button>
       )}
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        <DialogContent>
+        <DialogContent className="rounded-[8px]">
           <DialogHeader>
-            <DialogTitle>Create New Project</DialogTitle>
+            <DialogTitle>Create project</DialogTitle>
             <DialogDescription>
-              Create a new project to organize your tasks
+              New project with default Kanban columns (Backlog → Done)
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="project-name">Project Name</Label>
+              <Label htmlFor="project-name">Name</Label>
               <Input
                 id="project-name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Enter project name..."
+                placeholder="Project name"
+                className="border-2 border-[#DFE1E6] rounded-[3px]"
               />
             </div>
             <div className="space-y-2">
@@ -164,20 +167,23 @@ export function ProjectSelector({
                 id="project-desc"
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="Project description..."
+                placeholder="Optional"
                 rows={3}
+                className="border-2 border-[#DFE1E6] rounded-[3px]"
               />
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
+            <Button variant="outline" onClick={() => setIsCreateOpen(false)} className="rounded-[3px]">
               Cancel
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={!newName.trim() || isLoading}>
-              Create Project
+              disabled={!newName.trim() || isLoading}
+              className="rounded-[3px] bg-[#0052CC]"
+            >
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TaskComments } from "@/components/task-comments";
 import { ChinaAttributesGuide } from "@/components/china-attributes-guide";
 import { useChinaPrediction, type ChinaPredictionResult } from "@/hooks/use-china-prediction";
-import { Users, MessageSquare, Calendar, Clock, BarChart3, Save, HelpCircle, Calculator, TrendingUp, TrendingDown, Loader2 } from "lucide-react";
+import { Users, MessageSquare, Calendar, Clock, BarChart3, Save, HelpCircle, Calculator, TrendingUp, TrendingDown, Loader2, Trash2, Pencil } from "lucide-react";
 import { format } from "date-fns";
 
 interface TaskAssignment {
@@ -39,6 +39,8 @@ interface TaskDialogProps {
   onTaskUpdate?: (task: Tables<"tasks">) => void;
   onTaskCreate?: (task: Tables<"tasks">) => void;
   onTaskDelete?: (taskId: string) => void;
+  readOnly?: boolean;
+  canDelete?: boolean;
 }
 
 export function TaskDialog({
@@ -47,8 +49,13 @@ export function TaskDialog({
   task,
   open,
   onOpenChange,
+  readOnly = false,
+  canDelete = false,
   onTaskCreate,
+  onTaskUpdate,
+  onTaskDelete,
 }: TaskDialogProps) {
+  const [mode, setMode] = useState<"view" | "edit" | "create">("create");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [attributes, setAttributes] = useState<ChinaAttributes>({
@@ -110,6 +117,7 @@ export function TaskDialog({
     checkSwimlane();
 
     if (task) {
+      setMode("view");
       setTitle(task.title);
       setDescription(task.description || "");
       setAttributes({
@@ -124,6 +132,7 @@ export function TaskDialog({
       });
       fetchAssignments(task.id);
     } else {
+      setMode("create");
       setTitle("");
       setDescription("");
       setAttributes({
@@ -170,6 +179,77 @@ export function TaskDialog({
     }
   };
 
+  const getEstimatedEffortPmForSave = () => {
+    if (apiPrediction?.prediction_pm != null) return apiPrediction.prediction_pm;
+    return hoursToMonths(estimateEffortChina(attributes));
+  };
+
+  const buildTaskPayload = () => {
+    return {
+      title: title.trim(),
+      description: description || null,
+      attr_afp: attributes.afp,
+      attr_input: attributes.input,
+      attr_output: attributes.output,
+      attr_enquiry: attributes.enquiry,
+      attr_file: attributes.file,
+      attr_interface: attributes.interface,
+      attr_resource: attributes.resource,
+      attr_duration: attributes.duration,
+      estimated_effort_pm: getEstimatedEffortPmForSave(),
+    };
+  };
+
+  const handleUpdate = async () => {
+    if (!task || !title.trim() || !onTaskUpdate) return;
+
+    setIsLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/tasks/${task.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildTaskPayload()),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Update failed");
+      }
+
+      const updated = await res.json();
+      onTaskUpdate(updated);
+      onOpenChange(false);
+    } catch (error) {
+      console.error("Error updating task:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!task || !onTaskDelete) return;
+    if (!confirm(`Delete task "${task.title}"? This cannot be undone.`)) return;
+
+    setIsLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/tasks/${task.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Delete failed");
+      }
+
+      onTaskDelete(task.id);
+      onOpenChange(false);
+    } catch (error) {
+      console.error("Error deleting task:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleCreate = async () => {
     if (!title.trim() || !onTaskCreate) return;
 
@@ -177,25 +257,14 @@ export function TaskDialog({
     const supabase = createClient();
 
     try {
-      const effortHours = estimateEffortChina(attributes);
-      const estimatedEffort = hoursToMonths(effortHours);
-      
+      const payload = buildTaskPayload();
+
       const { data, error } = await supabase
         .from("tasks")
         .insert({
           project_id: projectId,
           swimlane_id: swimlaneId,
-          title,
-          description,
-          attr_afp: attributes.afp,
-          attr_input: attributes.input,
-          attr_output: attributes.output,
-          attr_enquiry: attributes.enquiry,
-          attr_file: attributes.file,
-          attr_interface: attributes.interface,
-          attr_resource: attributes.resource,
-          attr_duration: attributes.duration,
-          estimated_effort_pm: estimatedEffort,
+          ...payload,
           position: 0,
         })
         .select()
@@ -224,8 +293,8 @@ export function TaskDialog({
     }
   };
 
-  // For existing tasks - read-only view
-  if (task) {
+  // Existing task — view (Details/Comments). Edit is explicit via button.
+  if (task && mode === "view") {
     const taskAttributes: ChinaAttributes = {
       afp: task.attr_afp || 200,
       input: task.attr_input || 30,
@@ -279,6 +348,20 @@ export function TaskDialog({
                 <span className="font-mono text-xs">{task.id.slice(0, 8)}</span>
               </div>
             </div>
+            {!readOnly && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setMode("edit");
+                  setApiPrediction(null);
+                }}
+                className="h-8 shrink-0"
+              >
+                <Pencil className="size-4 mr-2" />
+                Edit
+              </Button>
+            )}
           </div>
         </DialogHeader>
 
@@ -502,6 +585,175 @@ export function TaskDialog({
   );
   }
 
+  // Existing task — edit mode (only via Edit button)
+  if (task && mode === "edit" && !readOnly) {
+    return (
+      <React.Fragment>
+        <Dialog open={open} onOpenChange={onOpenChange}>
+          <DialogContent className="!max-w-[95vw] !w-[95vw] sm:!max-w-[95vw] md:!max-w-[95vw] lg:!max-w-[95vw] xl:!max-w-[95vw] max-h-[95vh] flex flex-col p-0 gap-0">
+            <DialogHeader className="px-6 py-4 border-b bg-slate-50 shrink-0">
+              <DialogTitle className="text-2xl font-semibold text-slate-900">
+                Edit Task
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-6 max-w-2xl w-full mx-auto">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-title">Task Title</Label>
+                  <Input
+                    id="edit-title"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="edit-description">Description</Label>
+                  <Textarea
+                    id="edit-description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={4}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2">
+                    <Users className="size-4" />
+                    Assignees
+                  </Label>
+                  <TaskAssigneePicker
+                    projectId={projectId}
+                    taskId={task.id}
+                    assignments={assignments}
+                    onAssignmentsChange={setAssignments}
+                  />
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-sm">China Dataset Attributes</h4>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowGuide(true)}
+                      className="h-6 px-2 text-xs"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5 mr-1.5" />
+                      How to estimate
+                    </Button>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleEstimate}
+                      disabled={predicting}
+                      className="h-8"
+                    >
+                      {predicting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                          Estimating...
+                        </>
+                      ) : (
+                        <>
+                          <Calculator className="w-3.5 h-3.5 mr-1.5" />
+                          Estimate
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {predicting && (
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold text-indigo-900">Estimating…</div>
+                        <Loader2 className="w-4 h-4 text-indigo-700 animate-spin" />
+                      </div>
+                      <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                        <div className="space-y-3">
+                          <div className="h-3 w-32 bg-slate-100 rounded animate-pulse" />
+                          <div className="h-8 w-48 bg-slate-100 rounded animate-pulse" />
+                          <div className="h-5 w-28 bg-slate-100 rounded animate-pulse" />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-slate-600">
+                        Running offline effort model (simulating API latency)…
+                      </p>
+                    </div>
+                  )}
+
+                  {apiPrediction && !predicting && (
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+                      <div className="text-sm font-semibold text-indigo-900">Rule-based estimate</div>
+                      <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                        <div className="text-center">
+                          <p className="text-xs text-slate-600 mb-1">Estimated Effort</p>
+                          <div className="text-3xl font-bold text-indigo-600">
+                            {apiPrediction.prediction.toLocaleString()}
+                          </div>
+                          <p className="text-sm text-slate-700 mt-1">person-hours</p>
+                          <Badge variant="secondary" className="mt-2">
+                            {apiPrediction.prediction_pm.toFixed(2)} person-months
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {Object.entries(CHINA_DESCRIPTORS).map(([key, descriptor]) => (
+                    <ChinaAttributeSlider
+                      key={key}
+                      attribute={key as keyof ChinaAttributes}
+                      value={attributes[key as keyof ChinaAttributes]}
+                      onChange={(value) =>
+                        setAttributes((prev) => ({ ...prev, [key]: value }))
+                      }
+                      descriptor={descriptor}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t bg-slate-50 flex justify-between gap-2">
+              <div>
+                {canDelete && (
+                  <Button
+                    variant="outline"
+                    onClick={handleDelete}
+                    disabled={isLoading}
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                  >
+                    <Trash2 className="size-4 mr-2" />
+                    Delete
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setMode("view");
+                    setApiPrediction(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={handleUpdate} disabled={!title.trim() || isLoading}>
+                  <Save className="size-4 mr-2" />
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+        <ChinaAttributesGuide open={showGuide} onOpenChange={setShowGuide} />
+      </React.Fragment>
+    );
+  }
+
   // For new tasks - create form
   const effortHours = estimateEffortChina(attributes);
   const estimatedEffort = hoursToMonths(effortHours);
@@ -587,20 +839,38 @@ export function TaskDialog({
                 </Button>
               </div>
 
-              {/* API Prediction Results */}
-              {apiPrediction && (
+              {predicting && (
                 <div className="border-2 border-indigo-200 rounded-lg p-4 bg-indigo-50 space-y-4">
                   <div className="flex items-center justify-between">
-                    <h5 className="font-semibold text-sm text-indigo-900">API Prediction Results</h5>
-                    <Badge variant="outline" className="bg-indigo-100 text-indigo-700 border-indigo-300">
+                    <h5 className="font-semibold text-sm text-indigo-900">Rule-based estimate</h5>
+                    <Loader2 className="w-4 h-4 text-indigo-700 animate-spin" />
+                  </div>
+                  <div className="bg-white rounded-lg p-4 border border-indigo-200">
+                    <div className="space-y-3">
+                      <div className="h-3 w-32 bg-slate-100 rounded animate-pulse" />
+                      <div className="h-10 w-56 bg-slate-100 rounded animate-pulse" />
+                      <div className="h-5 w-28 bg-slate-100 rounded animate-pulse" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-600">
+                    Running offline effort model (simulating API latency)…
+                  </p>
+                </div>
+              )}
+
+              {apiPrediction && !predicting && (
+                <div className="border-2 border-indigo-200 rounded-lg p-4 bg-indigo-50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h5 className="font-semibold text-sm text-indigo-900">Rule-based estimate</h5>
+                    {/* <Badge variant="outline" className="bg-indigo-100 text-indigo-700 border-indigo-300">
                       {apiPrediction.model_version}
-                    </Badge>
+                    </Badge> */}
                   </div>
 
                   {/* Effort Display */}
                   <div className="bg-white rounded-lg p-4 border border-indigo-200">
                     <div className="text-center">
-                      <p className="text-xs text-slate-600 mb-1">Predicted Effort</p>
+                      <p className="text-xs text-slate-600 mb-1">Estimated Effort</p>
                       <div className="text-3xl font-bold text-indigo-600">
                         {apiPrediction.prediction.toLocaleString()}
                       </div>
@@ -678,7 +948,7 @@ export function TaskDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleCreate} disabled={!title.trim() || isLoading}>
+          <Button onClick={handleCreate} disabled={readOnly || !title.trim() || isLoading}>
             <Save className="size-4 mr-2" />
             Create Task
           </Button>

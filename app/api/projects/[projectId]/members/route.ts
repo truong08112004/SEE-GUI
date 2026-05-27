@@ -1,14 +1,20 @@
 import { createClient } from "@/lib/supabase/server";
+import { getProjectAuth } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { NextRequest, NextResponse } from "next/server";
 
-// GET: Lấy danh sách members của project
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const supabase = await createClient();
   const { projectId } = await params;
+  const ctx = await getProjectAuth(projectId);
 
+  if (!ctx || !can(ctx.role, "member:view", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const supabase = await createClient();
   const { data: members, error } = await supabase
     .from("project_members")
     .select(
@@ -28,49 +34,26 @@ export async function GET(
   return NextResponse.json(members);
 }
 
-// POST: Thêm member vào project
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const supabase = await createClient();
   const { projectId } = await params;
+  const ctx = await getProjectAuth(projectId);
+
+  if (!ctx || !can(ctx.role, "member:add", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const body = await request.json();
-
   const { user_id, role = "member" } = body;
-
-  // Check authentication
-  const {
-    data: { user: authUser },
-  } = await supabase.auth.getUser();
-
-  if (!authUser) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  // Check admin status
-  const { data: user, error: userError } = await supabase
-    .from("users")
-    .select("is_admin")
-    .eq("user_auth_id", authUser.id)
-    .single();
-
-  if (userError || !user) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
-  }
-
-  if (!user.is_admin) {
-    return NextResponse.json(
-      { error: "Only admins can add members" },
-      { status: 403 }
-    );
-  }
 
   if (!user_id) {
     return NextResponse.json({ error: "user_id is required" }, { status: 400 });
   }
 
-  // Kiểm tra member đã tồn tại chưa
+  const supabase = await createClient();
+
   const { data: existing } = await supabase
     .from("project_members")
     .select("id")

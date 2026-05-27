@@ -1,43 +1,46 @@
 import { createClient } from "@/lib/supabase/server";
+import { getProjectAuth } from "@/lib/auth";
+import { can, canManageRole, normalizeRole } from "@/lib/permissions";
+import type { ProjectRole } from "@/lib/permissions";
 import { NextRequest, NextResponse } from "next/server";
 
-// PUT: Cập nhật role của member
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; memberId: string }> }
 ) {
-  const supabase = await createClient();
-  const { memberId } = await params;
-  const body = await request.json();
+  const { projectId, memberId } = await params;
+  const ctx = await getProjectAuth(projectId);
 
-  // Check authentication
-  const {
-    data: { user: authUser },
-  } = await supabase.auth.getUser();
-
-  if (!authUser) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!ctx || !can(ctx.role, "member:change_role", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Check admin status
-  const { data: user, error: userError } = await supabase
-    .from("users")
-    .select("is_admin")
-    .eq("user_auth_id", authUser.id)
+  const body = await request.json();
+  const { role } = body as { role: ProjectRole };
+
+  const supabase = await createClient();
+
+  const { data: target } = await supabase
+    .from("project_members")
+    .select("role, user_id")
+    .eq("id", memberId)
     .single();
 
-  if (userError || !user) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  if (!target) {
+    return NextResponse.json({ error: "Member not found" }, { status: 404 });
   }
 
-  if (!user.is_admin) {
+  if (target.user_id === ctx.userId && role !== ctx.role) {
     return NextResponse.json(
-      { error: "Only admins can update member roles" },
+      { error: "Cannot change your own role" },
       { status: 403 }
     );
   }
 
-  const { role } = body;
+  const targetRole = normalizeRole(target.role);
+  if (!canManageRole(ctx.role, targetRole) || !canManageRole(ctx.role, role)) {
+    return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
+  }
 
   const { data: member, error } = await supabase
     .from("project_members")
@@ -53,37 +56,39 @@ export async function PUT(
   return NextResponse.json(member);
 }
 
-// DELETE: Xóa member khỏi project
 export async function DELETE(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ projectId: string; memberId: string }> }
 ) {
-  const supabase = await createClient();
-  const { memberId } = await params;
+  const { projectId, memberId } = await params;
+  const ctx = await getProjectAuth(projectId);
 
-  // Check authentication
-  const {
-    data: { user: authUser },
-  } = await supabase.auth.getUser();
-
-  if (!authUser) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!ctx || !can(ctx.role, "member:remove", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Check admin status
-  const { data: user, error: userError } = await supabase
-    .from("users")
-    .select("is_admin")
-    .eq("user_auth_id", authUser.id)
+  const supabase = await createClient();
+
+  const { data: target } = await supabase
+    .from("project_members")
+    .select("role, user_id")
+    .eq("id", memberId)
     .single();
 
-  if (userError || !user) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  if (!target) {
+    return NextResponse.json({ error: "Member not found" }, { status: 404 });
   }
 
-  if (!user.is_admin) {
+  if (normalizeRole(target.role) === "owner") {
     return NextResponse.json(
-      { error: "Only admins can remove members" },
+      { error: "Cannot remove project owner" },
+      { status: 403 }
+    );
+  }
+
+  if (target.user_id === ctx.userId) {
+    return NextResponse.json(
+      { error: "Cannot remove yourself" },
       { status: 403 }
     );
   }

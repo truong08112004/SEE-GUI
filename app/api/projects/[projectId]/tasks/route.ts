@@ -1,14 +1,20 @@
 import { createClient } from "@/lib/supabase/server";
+import { getProjectAuth } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { NextRequest, NextResponse } from "next/server";
 
-// GET: Lấy danh sách tasks của project
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const supabase = await createClient();
   const { projectId } = await params;
+  const ctx = await getProjectAuth(projectId);
 
+  if (!ctx || !can(ctx.role, "project:view", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const supabase = await createClient();
   const { data: tasks, error } = await supabase
     .from("tasks")
     .select("*")
@@ -19,7 +25,6 @@ export async function GET(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Lấy assignments riêng để tránh lỗi ambiguous relationship
   if (tasks && tasks.length > 0) {
     const taskIds = tasks.map((t) => t.id);
 
@@ -37,7 +42,6 @@ export async function GET(
 
       const usersMap = new Map(users?.map((u) => [u.id, u]));
 
-      // Map assignments vào tasks
       const tasksWithAssignments = tasks.map((task) => ({
         ...task,
         task_assignments: allAssignments
@@ -53,7 +57,6 @@ export async function GET(
     }
   }
 
-  // Trả về tasks với empty assignments nếu không có
   const tasksWithEmptyAssignments = tasks?.map((t) => ({
     ...t,
     task_assignments: [],
@@ -62,13 +65,18 @@ export async function GET(
   return NextResponse.json(tasksWithEmptyAssignments);
 }
 
-// POST: Tạo task mới
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const supabase = await createClient();
   const { projectId } = await params;
+  const ctx = await getProjectAuth(projectId);
+
+  if (!ctx || !can(ctx.role, "task:create", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const supabase = await createClient();
   const body = await request.json();
 
   const {

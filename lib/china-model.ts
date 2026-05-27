@@ -14,27 +14,26 @@ export interface ChinaAttributes {
   duration: number // Project duration (months)
 }
 
+const MIN_EFFORT_HOURS = 4
+const MAX_EFFORT_HOURS = 8000
+
 /**
- * Calculate effort in person-hours using China dataset model
- * Formula: Effort = base + Σ(coefficient_i * feature_i) * scale
+ * Task-level effort estimate (person-hours).
+ * Weighted sum tuned so sliders produce a visible range (~4h–thousands),
+ * not a flat floor at 100h.
  */
 export function estimateEffortChina(attributes: ChinaAttributes): number {
-  const baseEffort = 1200 // Base effort in person-hours
+  const hours =
+    attributes.afp * 0.35 +
+    attributes.input * 1.5 +
+    attributes.output * 1.2 +
+    attributes.enquiry * 1.0 +
+    attributes.file * 2.5 +
+    attributes.interface * 3.0 +
+    attributes.resource * 4 +
+    attributes.duration * 6
 
-  // Coefficients based on China dataset regression model
-  const contribution =
-    attributes.afp * -1.041 +
-    attributes.input * -2.293 +
-    attributes.output * 0.674 +
-    attributes.enquiry * -0.344 +
-    attributes.file * 1.247 +
-    attributes.interface * 2.156 +
-    attributes.resource * 3.892 +
-    attributes.duration * 8.467
-
-  const totalEffort = baseEffort + contribution * 50 // Scale factor
-
-  return Math.max(totalEffort, 100) // Minimum 100 hours
+  return Math.round(Math.min(Math.max(hours, MIN_EFFORT_HOURS), MAX_EFFORT_HOURS) * 100) / 100
 }
 
 /**

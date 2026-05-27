@@ -4,21 +4,21 @@ import { useState, useEffect } from "react";
 import type { Tables } from "@/lib/supabase/database.types";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
-import { SwimLaneBoard } from "@/components/swim-lane-board";
+import { SwimLaneBoard, type BoardPermissions } from "@/components/swim-lane-board";
 import { ProjectHeader } from "@/components/project-header";
 import { SEEInsightsPanel } from "@/components/see-insights-panel";
 import { TeamView } from "@/components/views/team-view";
 import { ProjectSelector } from "@/components/project-selector";
 import { Button } from "@/components/ui/button";
+import { Lozenge } from "@/components/ui/lozenge";
+import { ROLE_LABELS, type ProjectRole } from "@/lib/permissions";
+import type { LucideIcon } from "lucide-react";
 import {
-  CreditCard,
   LayoutDashboard,
-  Settings,
   Users,
-  Menu,
   ChevronLeft,
   ChevronRight,
-  PieChart
+  PieChart,
 } from "lucide-react";
 import { UserMenu } from "@/components/user-menu";
 import { cn } from "@/lib/utils";
@@ -35,46 +35,73 @@ interface TaskWithAssignments extends Tables<"tasks"> {
   }[];
 }
 
+export interface ProjectPermissions extends BoardPermissions {
+  role: ProjectRole;
+  canManageMembers: boolean;
+  canChangeRoles: boolean;
+  canCreateAccounts: boolean;
+  accountCreationAvailable: boolean;
+}
+
 interface ProjectDashboardProps {
   project: Tables<"projects"> | null;
   initialSwimlanes: Tables<"swimlanes">[];
   initialTasks: TaskWithAssignments[];
   user: User;
+  permissions: ProjectPermissions | null;
 }
 
-type DashboardView = "board" | "team" | "reports" | "settings";
+type DashboardView = "board" | "team" | "reports";
 
 export function ProjectDashboard({
   project: initialProject,
   initialSwimlanes,
   initialTasks,
   user,
+  permissions: initialPermissions,
 }: ProjectDashboardProps) {
   const [project, setProject] = useState(initialProject);
   const [swimlanes, setSwimlanes] = useState(initialSwimlanes);
   const [tasks, setTasks] = useState<TaskWithAssignments[]>(initialTasks);
+  const [permissions, setPermissions] = useState(initialPermissions);
   const [isLoading, setIsLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [currentView, setCurrentView] = useState<DashboardView>("board");
 
-  // Load data khi mới vào project
   useEffect(() => {
     if (initialProject) {
-      loadProjectData(initialProject.id).then(() => {
-        setIsInitialLoad(false);
-      });
+      loadProjectData(initialProject.id).then(() => setIsInitialLoad(false));
     } else {
       setIsLoading(false);
       setIsInitialLoad(false);
     }
   }, []);
 
+  const loadPermissions = async (projectId: string) => {
+    const res = await fetch(`/api/projects/${projectId}/me`);
+    if (res.ok) {
+      const data = await res.json();
+      setPermissions({
+        role: data.role,
+        canCreateTask: data.permissions.canCreateTask,
+        canEditTask: data.permissions.canEditTask,
+        canDeleteTask: data.permissions.canDeleteTask,
+        canMoveTask: data.permissions.canMoveTask,
+        canManageColumns: data.permissions.canManageColumns,
+        canManageMembers: data.permissions.canManageMembers,
+        canChangeRoles: data.permissions.canChangeRoles,
+        canCreateAccounts: data.permissions.canCreateAccounts,
+        accountCreationAvailable:
+          data.permissions.accountCreationAvailable ?? false,
+      });
+    }
+  };
+
   const loadProjectData = async (projectId: string) => {
     setIsLoading(true);
     try {
       const supabase = createClient();
-
       const [swimlanesRes, tasksRes] = await Promise.all([
         supabase
           .from("swimlanes")
@@ -82,6 +109,7 @@ export function ProjectDashboard({
           .eq("project_id", projectId)
           .order("position"),
         fetch(`/api/projects/${projectId}/tasks`).then((res) => res.json()),
+        loadPermissions(projectId),
       ]);
 
       setSwimlanes(swimlanesRes.data || []);
@@ -116,109 +144,112 @@ export function ProjectDashboard({
     setTasks(reorderedTasks as TaskWithAssignments[]);
   };
 
-  // Sidebar Nav Item Helper
-  const NavItem = ({ view, icon: Icon, label }: { view: DashboardView; icon: any; label: string }) => (
+  const boardPermissions: BoardPermissions = permissions ?? {
+    canCreateTask: false,
+    canEditTask: false,
+    canDeleteTask: false,
+    canMoveTask: false,
+    canManageColumns: false,
+    canCreateAccounts: false,
+  };
+
+  const NavItem = ({
+    view,
+    icon: Icon,
+    label,
+  }: {
+    view: DashboardView;
+    icon: LucideIcon;
+    label: string;
+  }) => (
     <Button
       variant="ghost"
       onClick={() => setCurrentView(view)}
       className={cn(
-        "w-full justify-start hover:text-white hover:bg-white/10 cursor-pointer transition-colors relative",
-        currentView === view ? "bg-white/10 text-white" : "text-indigo-200"
+        "w-full justify-start h-9 rounded-[3px] hover:text-white hover:bg-white/10 cursor-pointer",
+        currentView === view
+          ? "bg-white/15 text-white font-medium"
+          : "text-white/75"
       )}
     >
       {currentView === view && (
-        <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-400 rounded-r-full" />
+        <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-[#4C9AFF] rounded-r" />
       )}
-      <Icon className="w-5 h-5 shrink-0" />
-      {isSidebarOpen && <span className="ml-3 font-medium">{label}</span>}
+      <Icon className="w-4 h-4 shrink-0" />
+      {isSidebarOpen && <span className="ml-3 text-sm">{label}</span>}
     </Button>
   );
 
-  // Không có project nào
   if (!project) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-center space-y-4 max-w-md p-8 bg-white rounded-xl shadow-lg border border-slate-100">
-          <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <LayoutDashboard className="w-8 h-8" />
+      <div className="flex items-center justify-center min-h-screen bg-[#F4F5F7]">
+        <div className="text-center space-y-4 max-w-md p-8 bg-white rounded-[3px] border border-[#DFE1E6] ads-raised">
+          <div className="w-12 h-12 bg-[#DEEBFF] text-[#0052CC] rounded-[3px] flex items-center justify-center mx-auto">
+            <LayoutDashboard className="w-6 h-6" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900">
-            Welcome to Velociti AI
+          <h2 className="text-xl font-semibold text-[#172B4D]">
+            Welcome to Velociti
           </h2>
-          <p className="text-slate-500">
-            Create your first project to start managing your workflow with AI superpowers.
+          <p className="text-sm text-[#5E6C84]">
+            Create or select a project to open your Jira-style board.
           </p>
-          <div className="pt-4">
-            <ProjectSelector
-              currentProject={null}
-              onProjectChange={handleProjectChange}
-            />
-          </div>
+          <ProjectSelector
+            currentProject={null}
+            onProjectChange={handleProjectChange}
+          />
         </div>
       </div>
     );
   }
 
-  // Loading ban đầu - full screen loader
   if (isInitialLoad) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="flex flex-col items-center gap-4">
-          <div className="relative">
-            <div className="w-16 h-16 border-4 border-indigo-100 border-t-indigo-500 rounded-full animate-spin"></div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-8 h-8 bg-white rounded-full"></div>
-            </div>
-          </div>
-          <p className="text-sm font-medium text-slate-500 animate-pulse">Initializing Interface...</p>
+      <div className="flex items-center justify-center min-h-screen bg-[#F4F5F7]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-2 border-[#DEEBFF] border-t-[#0052CC] rounded-full animate-spin" />
+          <p className="text-sm text-[#5E6C84]">Loading workspace...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-900">
-      {/* Sidebar - Jira style */}
+    <div className="flex h-screen bg-[#F4F5F7] text-[#172B4D]">
       <aside
         className={cn(
-          "bg-indigo-950 text-white flex flex-col transition-all duration-300 relative z-20 shrink-0 shadow-xl",
-          isSidebarOpen ? "w-64" : "w-16"
+          "bg-[#0747A6] text-white flex flex-col transition-all duration-200 relative z-20 shrink-0",
+          isSidebarOpen ? "w-[240px]" : "w-14"
         )}
       >
-        <div className="h-16 flex items-center px-4 border-b border-white/10 shrink-0 bg-indigo-950/50 backdrop-blur-sm">
-          <div className="w-8 h-8 rounded bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shrink-0 shadow-lg">
-            <span className="font-bold text-lg text-white">V</span>
+        <div className="h-14 flex items-center px-3 border-b border-white/10 shrink-0">
+          <div className="w-8 h-8 rounded-[3px] bg-[#0052CC] flex items-center justify-center shrink-0">
+            <span className="font-bold text-sm">V</span>
           </div>
-          {isSidebarOpen && <span className="ml-3 font-bold truncate">Velociti AI</span>}
+          {isSidebarOpen && (
+            <span className="ml-2.5 font-semibold text-sm truncate">
+              Velociti
+            </span>
+          )}
         </div>
 
-        <div className="flex-1 py-6 overflow-y-auto overflow-x-hidden scrollbar-none">
-          <nav className="space-y-1.5 px-3">
+        <div className="flex-1 py-4 overflow-y-auto px-2">
+          <nav className="space-y-0.5 relative">
             <NavItem view="board" icon={LayoutDashboard} label="Board" />
-            <NavItem view="team" icon={Users} label="Team Members" />
+            <NavItem view="team" icon={Users} label="People" />
             <NavItem view="reports" icon={PieChart} label="Reports" />
           </nav>
-
-          <div className="mt-8 px-4">
-            {isSidebarOpen && <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-3 px-2">Settings</p>}
-            <nav className="space-y-1.5">
-              <Button variant="ghost" className="w-full justify-start text-indigo-200 hover:text-white hover:bg-white/10 px-2 cursor-pointer">
-                <Settings className="w-5 h-5 shrink-0" />
-                {isSidebarOpen && <span className="ml-3">System</span>}
-              </Button>
-              <Button variant="ghost" className="w-full justify-start text-indigo-200 hover:text-white hover:bg-white/10 px-2 cursor-pointer">
-                <CreditCard className="w-5 h-5 shrink-0" />
-                {isSidebarOpen && <span className="ml-3">Billing</span>}
-              </Button>
-            </nav>
-          </div>
         </div>
 
-        <div className="p-4 border-t border-white/10 shrink-0 bg-indigo-950/50">
-          {isSidebarOpen ? (
-            <div className="flex items-center gap-3">
-              <UserMenu user={user} showName={true} side="top" />
+        <div className="p-3 border-t border-white/10 shrink-0">
+          {permissions && isSidebarOpen && (
+            <div className="mb-2 px-1">
+              <Lozenge variant="info" className="text-[10px] normal-case">
+                {ROLE_LABELS[permissions.role]}
+              </Lozenge>
             </div>
+          )}
+          {isSidebarOpen ? (
+            <UserMenu user={user} showName side="top" />
           ) : (
             <div className="flex justify-center">
               <UserMenu user={user} showName={false} side="right" />
@@ -226,71 +257,84 @@ export function ProjectDashboard({
           )}
         </div>
 
-        {/* Toggle Button */}
         <button
+          type="button"
           onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          className="absolute -right-3 top-20 bg-white border border-slate-200 rounded-full p-1 text-slate-500 shadow-sm hover:text-indigo-600 transition-colors z-30 cursor-pointer hover:shadow-md"
+          className="absolute -right-3 top-16 bg-white border border-[#DFE1E6] rounded-full p-0.5 text-[#5E6C84] hover:text-[#0052CC] shadow-sm z-30 cursor-pointer"
         >
-          {isSidebarOpen ? <ChevronLeft className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          {isSidebarOpen ? (
+            <ChevronLeft className="w-3 h-3" />
+          ) : (
+            <ChevronRight className="w-3 h-3" />
+          )}
         </button>
       </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50">
-        <ProjectHeader
-          project={project}
-          tasks={tasks}
-          user={user}
-          onProjectChange={handleProjectChange}
-        />
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="h-14 bg-[#0052CC] text-white flex items-center px-4 shrink-0">
+          <ProjectHeader
+            project={project}
+            tasks={tasks}
+            user={user}
+            onProjectChange={handleProjectChange}
+            permissions={permissions}
+          />
+        </div>
 
-        <div className="flex flex-1 overflow-hidden relative">
-
-          {/* VIEW: BOARD */}
+        <div className="flex flex-1 overflow-hidden">
           {currentView === "board" && (
-            <div className="flex-1 overflow-y-auto overflow-x-auto bg-slate-50/50">
+            <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
               {isLoading ? (
                 <div className="flex items-center justify-center h-full">
-                  <p className="text-muted-foreground animate-pulse">Loading Board...</p>
+                  <p className="text-[#5E6C84] text-sm animate-pulse">
+                    Loading board...
+                  </p>
                 </div>
               ) : (
-                <div className="h-full p-6">
-                  <SwimLaneBoard
-                    projectId={project.id}
-                    swimlanes={swimlanes}
-                    tasks={tasks}
-                    onTaskUpdate={handleTaskUpdate}
-                    onTaskCreate={handleTaskCreate}
-                    onTaskDelete={handleTaskDelete}
-                    onTasksReorder={handleTasksReorder}
-                  />
-                </div>
+                <SwimLaneBoard
+                  projectId={project.id}
+                  swimlanes={swimlanes}
+                  tasks={tasks}
+                  permissions={boardPermissions}
+                  onTaskUpdate={handleTaskUpdate}
+                  onTaskCreate={handleTaskCreate}
+                  onTaskDelete={handleTaskDelete}
+                  onTasksReorder={handleTasksReorder}
+                  onSwimlanesChange={setSwimlanes}
+                />
               )}
             </div>
           )}
 
-          {/* VIEW: TEAM */}
           {currentView === "team" && (
-            <div className="flex-1 overflow-y-auto bg-slate-50">
-              <TeamView projectId={project.id} />
+            <div className="flex-1 overflow-y-auto bg-[#F4F5F7] p-6">
+              <TeamView
+                projectId={project.id}
+                canManageMembers={permissions?.canManageMembers ?? false}
+                canChangeRoles={permissions?.canChangeRoles ?? false}
+                canCreateAccounts={permissions?.canCreateAccounts ?? false}
+                accountCreationAvailable={
+                  permissions?.accountCreationAvailable ?? false
+                }
+              />
             </div>
           )}
 
-          {/* VIEW: REPORTS */}
           {currentView === "reports" && (
-            <div className="flex-1 overflow-y-auto bg-slate-50 p-8">
+            <div className="flex-1 overflow-y-auto bg-[#F4F5F7] p-6">
               <div className="max-w-5xl mx-auto">
-                <div className="text-center mb-8">
-                  <h2 className="text-3xl font-bold mb-2 text-slate-900">Project Analytics</h2>
-                  <p className="text-slate-600">Real-time insights and effort estimation metrics</p>
-                </div>
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
-                  <SEEInsightsPanel tasks={tasks} />
+                <h2 className="text-xl font-semibold text-[#172B4D] mb-1">
+                  Reports
+                </h2>
+                <p className="text-sm text-[#5E6C84] mb-6">
+                  Effort estimation and project metrics
+                </p>
+                <div className="bg-white rounded-[3px] border border-[#DFE1E6] ads-raised">
+                  <SEEInsightsPanel tasks={tasks} swimlanes={swimlanes} />
                 </div>
               </div>
             </div>
           )}
-
         </div>
       </div>
     </div>
