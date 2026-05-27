@@ -1,14 +1,20 @@
 import { createClient } from "@/lib/supabase/server";
+import { getProjectAuth } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { NextRequest, NextResponse } from "next/server";
 
-// GET: Lấy chi tiết task
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ projectId: string; taskId: string }> }
 ) {
-  const supabase = await createClient();
-  const { taskId } = await params;
+  const { projectId, taskId } = await params;
+  const ctx = await getProjectAuth(projectId);
 
+  if (!ctx || !can(ctx.role, "project:view", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const supabase = await createClient();
   const { data: task, error } = await supabase
     .from("tasks")
     .select(
@@ -32,19 +38,25 @@ export async function GET(
   return NextResponse.json(task);
 }
 
-// PUT: Cập nhật task
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; taskId: string }> }
 ) {
+  const { projectId, taskId } = await params;
+  const ctx = await getProjectAuth(projectId);
+
+  if (!ctx || !can(ctx.role, "task:edit", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const supabase = await createClient();
-  const { taskId } = await params;
   const body = await request.json();
 
   const { data: task, error } = await supabase
     .from("tasks")
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq("id", taskId)
+    .eq("project_id", projectId)
     .select()
     .single();
 
@@ -55,15 +67,23 @@ export async function PUT(
   return NextResponse.json(task);
 }
 
-// DELETE: Xóa task
 export async function DELETE(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ projectId: string; taskId: string }> }
 ) {
-  const supabase = await createClient();
-  const { taskId } = await params;
+  const { projectId, taskId } = await params;
+  const ctx = await getProjectAuth(projectId);
 
-  const { error } = await supabase.from("tasks").delete().eq("id", taskId);
+  if (!ctx || !can(ctx.role, "task:delete", ctx.isGlobalAdmin)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("tasks")
+    .delete()
+    .eq("id", taskId)
+    .eq("project_id", projectId);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

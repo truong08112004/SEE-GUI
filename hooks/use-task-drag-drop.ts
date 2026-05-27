@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import type { Tables } from "@/lib/supabase/database.types"
 
@@ -12,7 +11,7 @@ interface DragState {
   targetSwimLaneId: string | null
 }
 
-export function useTaskDragDrop() {
+export function useTaskDragDrop(projectId: string, canMove = true) {
   const [dragState, setDragState] = useState<DragState>({
     draggedTaskId: null,
     sourceSwimLaneId: null,
@@ -21,6 +20,7 @@ export function useTaskDragDrop() {
   })
 
   const handleDragStart = (taskId: string, swimlaneId: string, swimlaneName?: string) => {
+    if (!canMove) return
     setDragState({
       draggedTaskId: taskId,
       sourceSwimLaneId: swimlaneId,
@@ -30,9 +30,9 @@ export function useTaskDragDrop() {
   }
 
   const handleDragOver = (e: React.DragEvent, swimlaneId: string) => {
+    if (!canMove) return
     e.preventDefault()
     e.dataTransfer.dropEffect = "move"
-
     setDragState((prev) => ({
       ...prev,
       targetSwimLaneId: swimlaneId,
@@ -55,41 +55,30 @@ export function useTaskDragDrop() {
     onTasksReorder: (tasks: Tables<"tasks">[]) => void,
   ) => {
     e.preventDefault()
+    if (!canMove) return
 
-    const { draggedTaskId, sourceSwimLaneId, sourceSwimLaneName } = dragState
-
+    const { draggedTaskId, sourceSwimLaneId } = dragState
     if (!draggedTaskId) return
 
-    // Prevent moving tasks FROM "Done" swimlane to other swimlanes
-    if (sourceSwimLaneName && sourceSwimLaneName.toLowerCase() === "done" && sourceSwimLaneId !== targetSwimLaneId) {
-      return
-    }
-
-    // Find the dragged task
     const draggedTask = allTasks.find((t) => t.id === draggedTaskId)
     if (!draggedTask) return
 
-    // Get tasks in target swimlane (excluding the dragged task if it's already there)
     const targetTasks = tasks.filter((t) => t.id !== draggedTaskId)
-
-    // Calculate drop position (append to end by default)
     const dropPosition = targetTasks.length
 
-    // Create optimistic update
     const updatedTask = {
       ...draggedTask,
       swimlane_id: targetSwimLaneId,
       position: dropPosition,
     }
 
-    // Optimistically update UI
-    const optimisticTasks = allTasks.map((t) => (t.id === draggedTaskId ? updatedTask : t))
+    const optimisticTasks = allTasks.map((t) =>
+      t.id === draggedTaskId ? updatedTask : t
+    )
     onTasksReorder(optimisticTasks)
 
-    // Prepare task IDs in new order for the target swimlane
     const reorderedTaskIds = [...targetTasks.map((t) => t.id), draggedTaskId]
 
-    // Persist to backend
     try {
       const response = await fetch("/api/tasks/reorder", {
         method: "POST",
@@ -98,7 +87,8 @@ export function useTaskDragDrop() {
           taskIds: reorderedTaskIds,
           swimlaneId: targetSwimLaneId,
           targetSwimlaneName: targetSwimLaneName,
-          sourceSwimlaneName: sourceSwimLaneName,
+          sourceSwimlaneName: dragState.sourceSwimLaneName,
+          projectId,
         }),
       })
 
@@ -107,21 +97,18 @@ export function useTaskDragDrop() {
       }
 
       const { tasks: updatedTasks } = await response.json()
-
-      // Update with server response
       const finalTasks = allTasks.map((t) => {
-        const serverTask = updatedTasks.find((ut: Tables<"tasks">) => ut.id === t.id)
+        const serverTask = updatedTasks.find(
+          (ut: Tables<"tasks">) => ut.id === t.id
+        )
         return serverTask || t
       })
-
       onTasksReorder(finalTasks)
     } catch (error) {
-      console.error("[v0] Error persisting task reorder:", error)
-      // Rollback optimistic update
+      console.error("Error persisting task reorder:", error)
       onTasksReorder(allTasks)
     }
 
-    // Reset drag state
     setDragState({
       draggedTaskId: null,
       sourceSwimLaneId: null,
